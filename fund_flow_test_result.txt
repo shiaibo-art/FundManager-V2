@@ -1,0 +1,82 @@
+Fund Flow Test Results:
+============================================================
+
+Debug info:
+  [OK] 方法1成功: 86条数据 (资金流向)
+
+Parsed result: 86 sectors
+
+Top 20 sectors by fund flow ratio:
+  半导体: flow_ratio=15.91%, net_inflow=-13500840192.00万, change=-0.30%
+  通信设备: flow_ratio=8.24%, net_inflow=6994513664.00万, change=1.49%
+  电池: flow_ratio=5.48%, net_inflow=-4648526592.00万, change=-0.69%
+  电网设备: flow_ratio=4.75%, net_inflow=-4027111168.00万, change=0.24%
+  电子元件: flow_ratio=3.67%, net_inflow=3110922752.00万, change=1.58%
+  汽车零部件: flow_ratio=3.50%, net_inflow=-2969529600.00万, change=0.21%
+  电子化学品: flow_ratio=3.14%, net_inflow=-2661410848.00万, change=-1.58%
+  航天航空: flow_ratio=2.91%, net_inflow=2471652096.00万, change=4.58%
+  家电行业: flow_ratio=2.44%, net_inflow=-2074049536.00万, change=0.53%
+  通用设备: flow_ratio=2.37%, net_inflow=2009440768.00万, change=1.03%
+  电力行业: flow_ratio=2.07%, net_inflow=-1752672768.00万, change=0.44%
+  汽车整车: flow_ratio=2.01%, net_inflow=-1708563216.00万, change=0.34%
+  互联网服务: flow_ratio=1.99%, net_inflow=1688947712.00万, change=1.69%
+  化学制药: flow_ratio=1.98%, net_inflow=-1675793664.00万, change=0.05%
+  光伏设备: flow_ratio=1.92%, net_inflow=1627507968.00万, change=2.57%
+  有色金属: flow_ratio=1.88%, net_inflow=-1591390208.00万, change=1.57%
+  贵金属: flow_ratio=1.85%, net_inflow=-1568389376.00万, change=-0.69%
+  消费电子: flow_ratio=1.75%, net_inflow=-1486380800.00万, change=0.56%
+  化学制品: flow_ratio=1.64%, net_inflow=-1395043584.00万, change=0.38%
+  煤炭行业: flow_ratio=1.43%, net_inflow=1211171408.00万, change=2.44%
+
+
+=== Test specific sector matching ===
+白酒 (mapped: 酿酒行业):
+  flow_ratio=1.09%
+  net_inflow=-923475936.00万
+  sentiment=❄️ 冷清
+
+新能源 (mapped: 光伏设备):
+  flow_ratio=1.92%
+  net_inflow=1627507968.00万
+  sentiment=❄️ 冷清
+
+半导体 (mapped: 半导体):
+  flow_ratio=15.91%
+  net_inflow=-13500840192.00万
+  sentiment=⚠️ 极度活跃
+
+传媒 (mapped: 文化传媒):
+  flow_ratio=0.15%
+  net_inflow=123654144.00万
+  sentiment=❄️ 冷清
+
+煤炭 (mapped: 煤炭行业):
+  flow_ratio=1.43%
+  net_inflow=1211171408.00万
+  sentiment=❄️ 冷清
+
+红利 (mapped: 银行):
+  flow_ratio=0.80%
+  net_inflow=-680152064.00万
+  sentiment=❄️ 冷清
+
+医疗 (mapped: 医疗器械):
+  flow_ratio=0.40%
+  net_inflow=-337861808.00万
+  sentiment=❄️ 冷清
+
+新能源车 (mapped: 汽车整车):
+  flow_ratio=2.01%
+  net_inflow=-1708563216.00万
+  sentiment=😐 正常
+
+证券 (mapped: 证券):
+  flow_ratio=0.99%
+  net_inflow=842863872.00万
+  sentiment=❄️ 冷清
+
+银行 (mapped: 银行):
+  flow_ratio=0.80%
+  net_inflow=-680152064.00万
+  sentiment=❄️ 冷清
+

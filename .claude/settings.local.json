@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "mcp__web-reader__webReader",
+      "Bash(python:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "mcp__zread__get_repo_structure",
+      "mcp__web-search-prime__webSearchPrime",
+      "Bash(netstat:*)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(ping:*)",
+      "Bash(set PYTHONPATH=%CD%:*)",
+      "Bash(streamlit run:*)",
+      "Bash(if not exist config mkdir config:*)",
+      "Bash(taskkill:*)",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -m streamlit run app.py --server.port 8501)",
+      "Bash(\"G:\\\\PycharmProjects\\\\FundManager-V2\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nimport os\nimport sys\n\n# 模拟 openai_client.py 中的路径计算\nscript_dir = os.path.dirname\\(os.path.abspath\\(''utils/openai_client.py''\\)\\)\nparent_dir = os.path.dirname\\(script_dir\\)\nconfig_file = os.path.join\\(parent_dir, ''config'', ''openai_config.json''\\)\n\nprint\\(f''当前目录: {os.getcwd\\(\\)}''\\)\nprint\\(f''脚本目录: {script_dir}''\\)\nprint\\(f''父目录: {parent_dir}''\\)\nprint\\(f''配置文件路径: {config_file}''\\)\nprint\\(f''配置文件存在: {os.path.exists\\(config_file\\)}''\\)\n\n# 检查实际文件路径\nactual_path = ''G:\\\\PycharmProjects\\\\FundManager-V2\\\\config\\\\openai_config.json''\nprint\\(f''实际配置文件存在: {os.path.exists\\(actual_path\\)}''\\)\n\")",
+      "Bash(\"G:\\\\PycharmProjects\\\\FundManager-V2\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nimport sys\nprint\\(''Python:'', sys.executable\\)\nprint\\(''Python Path:'', sys.path[:3]\\)\n\ntry:\n    import openai\n    print\\(''OpenAI version:'', openai.__version__\\)\n    from openai import OpenAI\n    print\\(''OpenAI class imported successfully''\\)\n    \n    # 测试客户端初始化\n    client = OpenAI\\(\n        api_key=''test'',\n        base_url=''http://test''\n    \\)\n    print\\(''Client initialized:'', type\\(client\\)\\)\nexcept ImportError as e:\n    print\\(''ImportError:'', e\\)\nexcept Exception as e:\n    print\\(''Error:'', e\\)\n\")",
+      "Bash(\"G:\\\\PycharmProjects\\\\FundManager-V2\\\\.venv\\\\Scripts\\\\pip.exe\" install openai)",
+      "Bash(\".venv/Scripts/python.exe\" -m pip install openai --target \".venv/Lib/site-packages\")",
+      "Bash(\"G:\\\\PycharmProjects\\\\FundManager-V2\\\\.venv\\\\Scripts\\\\python.exe\" -m streamlit run \"G:\\\\PycharmProjects\\\\FundManager-V2\\\\app.py\" --server.port 8501)",
+      "Bash(tasklist:*)",
+      "Bash(\"G:\\\\PycharmProjects\\\\FundManager-V2\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nimport ast\nwith open\\(''pages/fund_detail.py'', ''r'', encoding=''utf-8''\\) as f:\n    content = f.read\\(\\)\n    # 检查关键修复是否存在\n    if ''if not isinstance\\(analysis_result, dict\\):'' in content:\n        print\\(''✅ 类型检查已添加''\\)\n    if ''return_ability = analysis_result.get'' in content:\n        print\\(''✅ return_ability 修复已添加''\\)\n    if ''stability_data = analysis_result.get'' in content:\n        print\\(''✅ stability 修复已添加''\\)\n    print\\(''所有修复已保存''\\)\n\")",
+      "Bash(\"G:\\\\PycharmProjects\\\\FundManager-V2\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nwith open\\(''pages/fund_detail.py'', ''r'', encoding=''utf-8''\\) as f:\n    content = f.read\\(\\)\n    checks = [\n        \\(''isinstance\\(analysis_result, dict\\)'', ''Type check added''\\),\n        \\(''return_ability = analysis_result.get'', ''return_ability fix added''\\),\n        \\(''stability_data = analysis_result.get'', ''stability fix added''\\)\n    ]\n    for check, msg in checks:\n        if check in content:\n            print\\(''[OK]'', msg\\)\n        else:\n            print\\(''[MISSING]'', msg\\)\n    print\\(''Done!''\\)\n\")",
+      "Bash(more:*)"
+    ]
+  }
+}

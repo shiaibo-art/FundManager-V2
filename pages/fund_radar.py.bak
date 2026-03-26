@@ -1,0 +1,746 @@
+"""基金雷达页面 - 发现市场热点和潜在机会"""
+import streamlit as st
+import pandas as pd
+import akshare as ak
+from datetime import datetime, timedelta
+from fund_api import get_fund_nav_history, calculate_max_drawdown
+import numpy as np
+
+
+# 行业关键词映射（用于识别基金所属行业）
+INDUSTRY_KEYWORDS = {
+    '人工智能': ['人工智能', 'AI', '智能', '算法', '算力', 'CPO', '光模块', '科技', 'TMT'],
+    '半导体': ['半导体', '芯片', '集成电路', '存储', '模拟', '射频'],
+    '新能源': ['新能源', '光伏', '风电', '太阳能', '锂电', '电池', '硅片', '清洁能源'],
+    '储能': ['储能', '电池', '锂电', '钠电', '固态电池', '动力电池'],
+    '新能源车': ['新能源车', '电动车', '汽车', '智能驾驶', '自动驾驶'],
+    '白酒': ['白酒', '酒', '茅台', '五粮液', '泸州', '食品饮料'],
+    '医药': ['医药', '生物', '疫苗', '创新药', '中药', '医疗', '健康', '药业'],
+    '军工': ['军工', '国防', '航空', '航天', '兵器'],
+    '金融': ['银行', '证券', '保险', '金融', '券商', '非银金融'],
+    '房地产': ['房地产', '地产', '物业', '建筑', '建材'],
+    '传媒': ['传媒', '影视', '游戏', '广告', '出版', '文体'],
+    '消费': ['消费', '零售', '食品', '家电', '旅游', '商贸', '日用'],
+    '煤炭': ['煤炭', '采掘', '矿产', '煤炭'],
+    '有色': ['有色', '有色金属', '铜', '铝', '锌', '铅', '镍', '钴', '锂'],
+    '黄金': ['黄金', '贵金属', '金', '白银', '银', '避险'],
+    '石油': ['石油', '原油', '油气', '石化', '能源'],
+    '电力': ['电力', '电网', '发电', '新能源电', '公用事业', '水电', '火电', '核电'],
+    '通信': ['通信', '5G', '6G', '光通信', '卫星'],
+    '计算机': ['计算机', '软件', '云计算', '大数据', '互联网', '信息技术'],
+    '电子': ['电子', '消费电子', '面板', 'LED', 'OLED'],
+    '化工': ['化工', '石化', '化纤', '塑料', '橡胶', '化学'],
+    '机械': ['机械', '设备', '工程机械', '数控', '制造'],
+    '农业': ['农业', '种业', '畜牧', '饲料', '农林牧渔'],
+    '红利': ['红利', '高股息', '股息', '价值', '低波'],
+    '高端制造': ['高端制造', '先进制造', '工业'],
+    '环保': ['环保', '节能', '环境', '绿色', '碳中和'],
+    '教育': ['教育', '培训', '学校'],
+    '物流': ['物流', '快递', '供应链'],
+    '交运': ['交通', '运输', '港口', '机场', '航运', '交运'],
+}
+
+# 热门ETF列表（用于监控成交额变化）
+POPULAR_ETFS = [
+    {'code': '159915', 'name': '创业板ETF', 'industry': '成长'},
+    {'code': '510300', 'name': '沪深300ETF', 'industry': '宽基'},
+    {'code': '512480', 'name': '半导体ETF', 'industry': '半导体'},
+    {'code': '516090', 'name': '新能源ETF', 'industry': '新能源'},
+    {'code': '161725', 'name': '白酒ETF', 'industry': '白酒'},
+    {'code': '512170', 'name': '医疗ETF', 'industry': '医药'},
+    {'code': '515030', 'name': '新能源车ETF', 'industry': '新能源车'},
+    {'code': '512880', 'name': '证券ETF', 'industry': '金融'},
+    {'code': '515220', 'name': '煤炭ETF', 'industry': '煤炭'},
+    {'code': '512980', 'name': '传媒ETF', 'industry': '传媒'},
+]
+
+
+def get_fund_rank_data(symbol: str = "全部") -> pd.DataFrame:
+    """
+    获取基金排行数据
+    symbol: 基金类型 choice of {"全部", "股票型", "混合型", "债券型", "指数型", "QDII", "FOF"}
+
+    返回DataFrame包含以下列:
+    - code: 基金代码
+    - name: 基金名称
+    - week_return: 近1周收益率
+    - month_return: 近1月收益率
+    - quarter_return: 近3月收益率
+    - half_year_return: 近6月收益率
+    - year_return: 近1年收益率
+    """
+    try:
+        df = ak.fund_open_fund_rank_em(symbol=symbol)
+
+        if df is None or len(df) == 0:
+            return pd.DataFrame()
+
+        # 使用列索引提取数据（避免编码问题）
+        # 根据实际API返回的列顺序：
+        # 0: 序号, 1: 基金代码, 2: 基金简称, 3: 基金类型, 4: 单位净值,
+        # 5: 累计净值, 6: 净值日期, 7: 近1周, 8: 近1月, 9: 近3月,
+        # 10: 近6月, 11: 近1年, 12: 近2年, 13: 近3年, ...
+
+        result_df = pd.DataFrame()
+
+        # 提取关键列
+        if len(df.columns) > 2:
+            result_df['code'] = df.iloc[:, 1].astype(str)  # 基金代码
+            result_df['name'] = df.iloc[:, 2].astype(str)  # 基金名称
+
+        # 提取收益率数据（从第7列开始）
+        if len(df.columns) > 7:
+            result_df['week_return'] = pd.to_numeric(df.iloc[:, 7], errors='coerce')  # 近1周
+        if len(df.columns) > 8:
+            result_df['month_return'] = pd.to_numeric(df.iloc[:, 8], errors='coerce')  # 近1月
+        if len(df.columns) > 9:
+            result_df['quarter_return'] = pd.to_numeric(df.iloc[:, 9], errors='coerce')  # 近3月
+        if len(df.columns) > 10:
+            result_df['half_year_return'] = pd.to_numeric(df.iloc[:, 10], errors='coerce')  # 近6月
+        if len(df.columns) > 11:
+            result_df['year_return'] = pd.to_numeric(df.iloc[:, 11], errors='coerce')  # 近1年
+
+        return result_df
+    except Exception as e:
+        st.error(f"获取基金排行数据失败: {e}")
+        return pd.DataFrame()
+
+
+def classify_fund_industry(fund_name: str) -> str:
+    """
+    根据基金名称分类所属行业
+    更具体的行业优先匹配（如储能优先于新能源）
+    """
+    if not fund_name or not isinstance(fund_name, str):
+        return '其他'
+
+    # 先进行小写转换（对英文部分有效）
+    fund_name_lower = fund_name.lower()
+
+    # 定义优先级顺序（更具体的行业放前面）
+    priority_order = [
+        '储能', '黄金', '半导体', '人工智能',
+        '新能源车', '新能源', '白酒', '医药',
+        '军工', '金融', '房地产', '传媒', '消费',
+        '煤炭', '有色', '石油', '电力', '通信',
+        '计算机', '电子', '化工', '机械', '农业',
+        '红利', '高端制造', '环保', '教育', '物流', '交运'
+    ]
+
+    # 按优先级顺序匹配
+    for industry in priority_order:
+        if industry not in INDUSTRY_KEYWORDS:
+            continue
+        keywords = INDUSTRY_KEYWORDS[industry]
+        for keyword in keywords:
+            # 同时检查原始名称和小写名称
+            if keyword in fund_name or keyword.lower() in fund_name_lower:
+                return industry
+
+    # 如果没有匹配到，返回'其他'
+    return '其他'
+
+
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> float:
+    """
+    计算RSI指标
+    """
+    if len(df) < period + 1:
+        return 50.0
+
+    df = df.copy()
+    df['change'] = df['nav'].diff()
+
+    # 计算上涨和下跌
+    df['gain'] = df['change'].where(df['change'] > 0, 0)
+    df['loss'] = -df['change'].where(df['change'] < 0, 0)
+
+    # 计算平均涨跌幅
+    avg_gain = df['gain'].rolling(window=period).mean()
+    avg_loss = df['loss'].rolling(window=period).mean()
+
+    # 计算RSI
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
+
+
+def calculate_price_percentile(df: pd.DataFrame) -> float:
+    """
+    计算当前价格在历史区间的百分位
+    """
+    if len(df) < 20:
+        return 50.0
+
+    current_nav = df.iloc[-1]['nav']
+    min_nav = df['nav'].min()
+    max_nav = df['nav'].max()
+
+    if max_nav == min_nav:
+        return 50.0
+
+    return (current_nav - min_nav) / (max_nav - min_nav) * 100
+
+
+def get_etf_share_change(etf_code: str) -> dict:
+    """
+    获取ETF成交额变化趋势（替代份额数据）
+    使用fund_etf_hist_em获取历史行情数据，用成交额变化反映资金流向
+
+    Args:
+        etf_code: ETF代码
+
+    Returns:
+        dict: 包含成交额变化信息的字典
+    """
+    try:
+        # 获取ETF历史行情数据（最近60个交易日）
+        df = ak.fund_etf_hist_em(
+            symbol=etf_code,
+            period="daily",
+            start_date=(datetime.now() - timedelta(days=90)).strftime("%Y%m%d"),
+            end_date=datetime.now().strftime("%Y%m%d"),
+            adjust=""
+        )
+
+        if df is None or len(df) == 0:
+            return get_empty_share_result()
+
+        # 查找成交额列
+        amount_col = None
+        for col in df.columns:
+            if '成交额' in col or 'amount' in col.lower():
+                amount_col = col
+                break
+
+        if amount_col is None:
+            # 尝试使用列索引（成交额通常是最后一列）
+            amount_col = df.columns[-1]
+
+        # 获取成交额数据并转换为数值
+        amount_series = pd.to_numeric(df[amount_col], errors='coerce').dropna()
+
+        if len(amount_series) == 0:
+            return get_empty_share_result()
+
+        # 计算最近几天的成交额变化
+        recent_5 = amount_series.tail(5)
+        recent_30 = amount_series.tail(min(30, len(amount_series)))
+
+        # 计算变化百分比
+        if len(recent_5) >= 2:
+            first_5 = recent_5.iloc[0]
+            last_5 = recent_5.iloc[-1]
+            change_5d = ((last_5 - first_5) / first_5 * 100) if first_5 > 0 else 0
+            consecutive_inflow = all(recent_5.iloc[i] > recent_5.iloc[i-1] for i in range(1, len(recent_5)))
+        else:
+            change_5d = 0
+            consecutive_inflow = False
+
+        if len(recent_30) >= 2:
+            first_30 = recent_30.iloc[0]
+            last_30 = recent_30.iloc[-1]
+            change_30d = ((last_30 - first_30) / first_30 * 100) if first_30 > 0 else 0
+        else:
+            change_30d = 0
+
+        # 计算日均变化
+        daily_changes = []
+        for i in range(1, len(amount_series)):
+            if amount_series.iloc[i-1] > 0:
+                daily_change = (amount_series.iloc[i] - amount_series.iloc[i-1]) / amount_series.iloc[i-1] * 100
+                daily_changes.append(daily_change)
+
+        # 计算平均成交额（用于判断活跃度）
+        avg_amount = amount_series.tail(20).mean()
+
+        return {
+            'base_shares': float(amount_series.iloc[-1]),  # 最新成交额
+            'daily_changes': daily_changes[-30:] if len(daily_changes) > 30 else daily_changes,
+            'recent_5_days_consecutive_inflow': consecutive_inflow,
+            'total_change_5d': change_5d,
+            'total_change_30d': change_30d,
+            'data_points': len(amount_series),
+            'avg_amount_20d': avg_amount,
+            'latest_amount': float(amount_series.iloc[-1]),
+        }
+    except Exception as e:
+        print(f"获取ETF成交额失败 ({etf_code}): {e}")
+        return get_empty_share_result()
+
+
+def get_empty_share_result() -> dict:
+    """返回空的成交额结果"""
+    return {
+        'base_shares': 0,
+        'daily_changes': [],
+        'recent_5_days_consecutive_inflow': False,
+        'total_change_5d': 0,
+        'total_change_30d': 0,
+        'data_points': 0,
+        'avg_amount_20d': 0,
+        'latest_amount': 0,
+    }
+
+
+def analyze_hot_sectors(week_top10: pd.DataFrame, month_top10: pd.DataFrame) -> dict:
+    """
+    分析热点行业
+    通过交叉比对近1周和近1月涨幅榜单，找出共同热点
+    """
+    # 统计各行业在榜单中的出现次数
+    week_industries = {}
+    month_industries = {}
+
+    for idx in week_top10.index:
+        fund_name = week_top10.loc[idx, 'name']
+        industry = classify_fund_industry(fund_name)
+        week_industries[industry] = week_industries.get(industry, 0) + 1
+
+    for idx in month_top10.index:
+        fund_name = month_top10.loc[idx, 'name']
+        industry = classify_fund_industry(fund_name)
+        month_industries[industry] = month_industries.get(industry, 0) + 1
+
+    # 找出共同热点（在两个榜单中都出现较多的行业）
+    hot_sectors = []
+    all_industries = set(week_industries.keys()) | set(month_industries.keys())
+
+    for industry in all_industries:
+        week_count = week_industries.get(industry, 0)
+        month_count = month_industries.get(industry, 0)
+        total_score = week_count + month_count
+
+        if total_score >= 2:  # 在两个榜单中至少出现2次
+            hot_sectors.append({
+                'industry': industry,
+                'week_count': week_count,
+                'month_count': month_count,
+                'total_score': total_score,
+                'is_hot': total_score >= 4  # 至少4次才算强热点
+            })
+
+    hot_sectors.sort(key=lambda x: x['total_score'], reverse=True)
+
+    return {
+        'week_distribution': week_industries,
+        'month_distribution': month_industries,
+        'hot_sectors': hot_sectors
+    }
+
+
+def check_reversal_signal(fund_code: str, fund_name: str) -> dict:
+    """
+    检查反转信号（低位热点发现）
+    判断条件：连续下跌后出现RSI低位金叉
+    """
+    try:
+        df = get_fund_nav_history(fund_code, period="6月")
+
+        if df is None or len(df) < 60:
+            return None
+
+        # 计算RSI
+        rsi = calculate_rsi(df)
+
+        # 计算价格百分位
+        price_percentile = calculate_price_percentile(df)
+
+        # 计算近期的涨跌幅
+        recent_20_return = (df.iloc[-1]['nav'] - df.iloc[-20]['nav']) / df.iloc[-20]['nav'] * 100
+        recent_5_return = (df.iloc[-1]['nav'] - df.iloc[-5]['nav']) / df.iloc[-5]['nav'] * 100
+
+        # 判断是否满足反转条件
+        is_oversold = rsi < 40  # RSI超卖
+        is_low_price = price_percentile < 30  # 价格处于低位
+        is_recent_strong = recent_5_return > 2  # 近期强劲反弹
+
+        reversal_signal = {
+            'fund_code': fund_code,
+            'fund_name': fund_name,
+            'rsi': round(rsi, 2),
+            'price_percentile': round(price_percentile, 2),
+            'recent_5_return': round(recent_5_return, 2),
+            'recent_20_return': round(recent_20_return, 2),
+            'is_reversal': is_oversold and is_low_price and is_recent_strong,
+        }
+
+        return reversal_signal
+    except Exception as e:
+        return None
+
+
+def check_overheat_warning(fund_code: str, fund_name: str) -> dict:
+    """
+    检查过热警告（高位热点回避）
+    判断条件：估值百分位超过90%且近期涨幅过大
+    """
+    try:
+        df = get_fund_nav_history(fund_code, period="1年")
+
+        if df is None or len(df) < 120:
+            return None
+
+        # 计算价格百分位
+        price_percentile = calculate_price_percentile(df)
+
+        # 计算近期涨跌幅
+        recent_20_return = (df.iloc[-1]['nav'] - df.iloc[-20]['nav']) / df.iloc[-20]['nav'] * 100
+        recent_60_return = (df.iloc[-1]['nav'] - df.iloc[-60]['nav']) / df.iloc[-60]['nav'] * 100
+
+        # 计算最大回撤
+        max_dd, _, _ = calculate_max_drawdown(df)
+
+        # 判断是否过热
+        is_high_price = price_percentile > 90  # 价格处于高位
+        is_recent_hot = recent_20_return > 15  # 近期涨幅过大
+        is_long_term_hot = recent_60_return > 30  # 中期涨幅也大
+
+        overheat_signal = {
+            'fund_code': fund_code,
+            'fund_name': fund_name,
+            'price_percentile': round(price_percentile, 2),
+            'recent_20_return': round(recent_20_return, 2),
+            'recent_60_return': round(recent_60_return, 2),
+            'max_drawdown': round(max_dd, 2),
+            'is_overheat': is_high_price and (is_recent_hot or is_long_term_hot),
+            'warning_level': 'critical' if price_percentile > 95 else 'high'
+        }
+
+        return overheat_signal
+    except Exception as e:
+        return None
+
+
+def fund_radar_page():
+    """基金雷达页面"""
+    st.title("📡 基金雷达")
+    st.info("🎯 自动发现市场热点、捕捉资金流向、预警风险机会")
+
+    # 功能说明
+    with st.expander("📖 基金雷达功能说明"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**🔥 热点发现**")
+            st.markdown("交叉比对近1周/近1月涨幅榜单，自动识别当前热点行业")
+        with col2:
+            st.markdown("**💰 吸金能力**")
+            st.markdown("监控ETF成交额变化，连续5天放大=大资金涌入")
+        with col3:
+            st.markdown("**⚠️ 风险预警**")
+            st.markdown("低位反转机会+高位过热警告，帮你择时")
+
+    # 标签页
+    tab1, tab2, tab3 = st.tabs(["🔥 热点发现", "💰 吸金能力", "⚠️ 风险预警"])
+
+    # ==================== 热点发现 ====================
+    with tab1:
+        st.subheader("🔥 市场热点发现")
+        st.caption("通过交叉比对近1周和近1月涨幅榜单，自动识别当前热点行业")
+
+        # 刷新按钮和调试选项
+        col1, col2, col3 = st.columns([1, 2, 2])
+        with col1:
+            refresh = st.button("🔄 刷新数据")
+        with col2:
+            show_debug = st.checkbox("🔍 显示调试信息")
+
+        # 获取基金排行数据
+        with st.spinner("正在获取基金排行数据..."):
+            rank_df = get_fund_rank_data("全部")
+
+        if rank_df is None or len(rank_df) == 0:
+            st.warning("⚠️ 暂无数据，请稍后再试")
+            return
+
+        # 筛选有涨跌幅数据的基金
+        rank_df = rank_df.dropna(subset=['week_return', 'month_return'])
+
+        # 获取近1周涨幅前10名
+        week_top10 = rank_df.nlargest(10, 'week_return').copy()
+
+        # 获取近1月涨幅前10名
+        month_top10 = rank_df.nlargest(10, 'month_return').copy()
+
+        # 分析热点行业
+        hot_analysis = analyze_hot_sectors(week_top10, month_top10)
+
+        # 显示调试信息
+        if show_debug:
+            with st.expander("🔍 调试信息 - 基金名称和行业分类"):
+                st.markdown("### 近1周涨幅TOP10基金分类:")
+                for idx in week_top10.head(10).index:
+                    fund_name = week_top10.loc[idx, 'name']
+                    industry = classify_fund_industry(fund_name)
+                    st.markdown(f"- **{fund_name}** → {industry}")
+
+                st.markdown("### 近1月涨幅TOP10基金分类:")
+                for idx in month_top10.head(10).index:
+                    fund_name = month_top10.loc[idx, 'name']
+                    industry = classify_fund_industry(fund_name)
+                    st.markdown(f"- **{fund_name}** → {industry}")
+
+        # 显示当前热点行业
+        st.subheader("🎯 当前热点行业")
+        if hot_analysis['hot_sectors']:
+            cols = st.columns(4)
+            for i, sector in enumerate(hot_analysis['hot_sectors'][:8]):
+                col = cols[i % 4]
+                is_hot = sector['is_hot']
+                icon = "🔥🔥" if is_hot else "🔥"
+
+                with col:
+                    st.markdown(f"**{icon} {sector['industry']}**")
+                    st.caption(f"周榜: {sector['week_count']} | 月榜: {sector['month_count']}")
+                    st.metric("热度", f"{sector['total_score']}分")
+        else:
+            st.info("暂无明显热点行业")
+
+        st.divider()
+
+        # 显示榜单
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### 📈 近1周涨幅TOP10")
+            week_data = []
+            for idx in week_top10.index:
+                fund_name = week_top10.loc[idx, 'name']
+                industry = classify_fund_industry(fund_name)
+                week_data.append({
+                    '基金名称': fund_name,
+                    '代码': week_top10.loc[idx, 'code'],
+                    '近1周': f"{week_top10.loc[idx, 'week_return']:+.2f}%",
+                    '近1月': f"{week_top10.loc[idx, 'month_return']:+.2f}%",
+                    '行业': industry
+                })
+            st.dataframe(pd.DataFrame(week_data), use_container_width=True, hide_index=True)
+
+        with col2:
+            st.markdown("### 📈 近1月涨幅TOP10")
+            month_data = []
+            for idx in month_top10.index:
+                fund_name = month_top10.loc[idx, 'name']
+                industry = classify_fund_industry(fund_name)
+                month_data.append({
+                    '基金名称': fund_name,
+                    '代码': month_top10.loc[idx, 'code'],
+                    '近1月': f"{month_top10.loc[idx, 'month_return']:+.2f}%",
+                    '近1周': f"{month_top10.loc[idx, 'week_return']:+.2f}%",
+                    '行业': industry
+                })
+            st.dataframe(pd.DataFrame(month_data), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # 交叉分析
+        st.subheader("🔍 交叉分析：周榜与月榜交集")
+        intersection = pd.merge(
+            week_top10[['code', 'name', 'week_return', 'month_return']],
+            month_top10[['code', 'name']],
+            on='code',
+            how='inner',
+            suffixes=('', '_y')  # 避免列名冲突
+        )
+
+        if len(intersection) > 0:
+            st.success(f"🎯 发现 {len(intersection)} 只基金同时出现在两个榜单中，说明这些方向是当前市场最强热点！")
+
+            for idx in intersection.index:
+                fund_name = intersection.loc[idx, 'name']
+                industry = classify_fund_industry(fund_name)
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                col1.markdown(f"**{fund_name}**")
+                col2.metric("近1周", f"{intersection.loc[idx, 'week_return']:+.2f}%")
+                col3.metric("近1月", f"{intersection.loc[idx, 'month_return']:+.2f}%")
+                col4.markdown(f"🏷️ {industry}")
+        else:
+            st.info("暂无交集，说明市场热点切换较快")
+
+    # ==================== 吸金能力 ====================
+    with tab2:
+        st.subheader("💰 吸金能力分析")
+        st.caption("监控ETF成交额变化，连续5天成交额放大说明大资金在疯狂涌入该赛道")
+
+        st.info("💡 **判断标准**: 如果某行业ETF连续5天成交额净增加，说明大资金正在涌入，值得重点关注")
+
+        # 分析热门ETF
+        with st.spinner("正在分析ETF成交额变化..."):
+            etf_analysis = []
+
+            for etf in POPULAR_ETFS:
+                share_data = get_etf_share_change(etf['code'])
+
+                etf_info = {
+                    'code': etf['code'],
+                    'name': etf['name'],
+                    'industry': etf['industry'],
+                    'consecutive_inflow': share_data['recent_5_days_consecutive_inflow'],
+                    'change_5d': share_data['total_change_5d'],
+                    'change_30d': share_data['total_change_30d'],
+                }
+
+                etf_analysis.append(etf_info)
+
+            etf_df = pd.DataFrame(etf_analysis)
+
+        # 显示连续净流入的ETF
+        inflow_etfs = etf_df[etf_df['consecutive_inflow'] == True]
+
+        if len(inflow_etfs) > 0:
+            st.warning(f"🚨 {len(inflow_etfs)} 个行业ETF连续5天成交额净增加，大资金正在涌入！")
+
+            cols = st.columns(4)
+            for i, (_, etf) in enumerate(inflow_etfs.iterrows()):
+                if i >= 8:
+                    break
+                col = cols[i % 4]
+
+                with col:
+                    st.metric(
+                        f"{etf['name']}",
+                        f"{etf['change_5d']:+.1f}%",
+                        delta=f"近5日"
+                    )
+                    st.caption(f"🏷️ {etf['industry']}")
+                    st.caption(f"📊 近30日: {etf['change_30d']:+.1f}%")
+        else:
+            st.info("暂无ETF连续5天净流入")
+
+        st.divider()
+
+        # 全部ETF成交额变化排行
+        st.subheader("📊 全部ETF成交额变化排行")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### 🔥 资金追捧TOP5（近5日）")
+            top_inflow = etf_df.nlargest(5, 'change_5d')
+            for _, etf in top_inflow.iterrows():
+                delta_color = "🟢" if etf['change_5d'] > 0 else "🔴"
+                st.metric(
+                    f"{etf['name']}",
+                    f"{etf['change_5d']:+.1f}%",
+                    delta=f"{delta_color} {etf['industry']}"
+                )
+
+        with col2:
+            st.markdown("#### ❄️ 资金流出TOP5（近5日）")
+            top_outflow = etf_df.nsmallest(5, 'change_5d')
+            for _, etf in top_outflow.iterrows():
+                delta_color = "🟢" if etf['change_5d'] > 0 else "🔴"
+                st.metric(
+                    f"{etf['name']}",
+                    f"{etf['change_5d']:+.1f}%",
+                    delta=f"{delta_color} {etf['industry']}"
+                )
+
+        st.divider()
+
+        # 详细数据表
+        st.subheader("📋 ETF成交额变化详情")
+        display_df = etf_df.copy()
+        display_df['近5日变化'] = display_df['change_5d'].apply(lambda x: f"{x:+.1f}%")
+        display_df['近30日变化'] = display_df['change_30d'].apply(lambda x: f"{x:+.1f}%")
+        display_df['连续流入'] = display_df['consecutive_inflow'].apply(lambda x: "✅" if x else "❌")
+
+        st.dataframe(
+            display_df[['name', 'industry', '近5日变化', '近30日变化', '连续流入']],
+            use_container_width=True,
+            hide_index=True
+        )
+
+    # ==================== 风险预警 ====================
+    with tab3:
+        st.subheader("⚠️ 风险预警")
+
+        col1, col2 = st.columns(2)
+
+        # 低位反转机会
+        with col1:
+            st.markdown("### 🟢 低位反转机会")
+            st.caption("连续下跌后突然出现RSI低位金叉，可能是反转机会")
+
+            st.info("💡 **判断标准**: RSI<40 + 价格百分位<30% + 近5日涨幅>2%")
+
+            # 分析热门榜单中的基金
+            reversal_candidates = []
+
+            with st.spinner("正在扫描反转信号..."):
+                for idx in week_top10.head(20).index:
+                    fund_code = week_top10.loc[idx, 'code']
+                    fund_name = week_top10.loc[idx, 'name']
+                    signal = check_reversal_signal(fund_code, fund_name)
+                    if signal and signal['is_reversal']:
+                        reversal_candidates.append(signal)
+
+            if reversal_candidates:
+                st.success(f"🎯 发现 {len(reversal_candidates)} 个潜在反转机会！")
+
+                for signal in reversal_candidates[:5]:
+                    with st.container():
+                        col_a, col_b, col_c = st.columns(3)
+                        col_a.markdown(f"**{signal['fund_name']}**")
+                        col_b.metric("RSI", f"{signal['rsi']:.1f}")
+                        col_c.metric("价格百分位", f"{signal['price_percentile']:.1f}%")
+
+                        st.caption(
+                            f"近5日: {signal['recent_5_return']:+.2f}% | "
+                            f"近20日: {signal['recent_20_return']:+.2f}%"
+                        )
+                        st.divider()
+            else:
+                st.info("暂无反转信号")
+
+        # 高位过热警告
+        with col2:
+            st.markdown("### 🔴 高位过热警告")
+            st.caption("估值百分位过高且涨幅过大，切勿追高")
+
+            st.warning("⚠️ **判断标准**: 价格百分位>90% + 近20日涨幅>15%")
+
+            # 分析热门榜单中的基金
+            overheat_candidates = []
+
+            with st.spinner("正在扫描过热信号..."):
+                for idx in month_top10.head(20).index:
+                    fund_code = month_top10.loc[idx, 'code']
+                    fund_name = month_top10.loc[idx, 'name']
+                    signal = check_overheat_warning(fund_code, fund_name)
+                    if signal and signal['is_overheat']:
+                        overheat_candidates.append(signal)
+
+            if overheat_candidates:
+                st.error(f"🚨 发现 {len(overheat_candidates)} 个过热警告！切勿追高！")
+
+                for signal in overheat_candidates[:5]:
+                    with st.container():
+                        warning_icon = "🚨" if signal['warning_level'] == 'critical' else "⚠️"
+                        col_a, col_b, col_c = st.columns(3)
+                        col_a.markdown(f"**{warning_icon} {signal['fund_name']}**")
+                        col_b.metric("价格百分位", f"{signal['price_percentile']:.1f}%")
+                        col_c.metric("近20日涨幅", f"{signal['recent_20_return']:+.2f}%")
+
+                        st.caption(
+                            f"近60日: {signal['recent_60_return']:+.2f}% | "
+                            f"最大回撤: {signal['max_drawdown']:.2f}%"
+                        )
+                        st.divider()
+            else:
+                st.success("✅ 暂无过热警告")
+
+        st.divider()
+
+        # 综合建议
+        st.subheader("💡 基金雷达综合建议")
+
+        if reversal_candidates and not overheat_candidates:
+            st.success("🟢 **当前市场环境**: 有低位反转机会，无过热风险，可积极布局")
+        elif not reversal_candidates and overheat_candidates:
+            st.error("🔴 **当前市场环境**: 多个赛道过热，建议谨慎追高，注意止盈")
+        elif reversal_candidates and overheat_candidates:
+            st.warning("🟠 **当前市场环境**: 结构性行情，有反转机会但也有过热风险，需精选赛道")
+        else:
+            st.info("🔵 **当前市场环境**: 暂无明显信号，建议保持正常定投节奏")

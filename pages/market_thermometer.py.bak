@@ -1,0 +1,725 @@
+"""市场温度计页面"""
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+from db import get_holdings, get_all_funds
+from fund_api import (
+    get_fund_nav_history,
+    get_fund_performance,
+    calculate_volatility,
+    calculate_max_drawdown
+)
+import akshare as ak
+
+
+# 行业名称映射
+# 将ETF/基金行业名称映射到stock_sector_fund_flow_rank的实际行业名称
+SECTOR_NAME_MAPPING = {
+    '白酒': '酿酒行业',
+    '新能源': '光伏设备',  # 也可以是风电设备、电池等
+    '半导体': '半导体',
+    '传媒': '文化传媒',
+    '煤炭': '煤炭行业',
+    '红利': '银行',  # 红利指数主要包含银行等高股息行业
+    '医疗': '医疗器械',  # 或医疗服务
+    '新能源车': '汽车整车',
+    '证券': '证券',
+    '银行': '银行',
+}
+
+
+def get_sector_fund_flow_data() -> tuple:
+    """
+    获取行业资金流向数据
+    优先使用 stock_sector_fund_flow_rank 获取详细的资金流向数据
+
+    返回: (数据字典, 调试信息列表)
+    """
+    debug_info = []
+    result = {}
+
+    # 方法1: stock_sector_fund_flow_rank (东方财富行业资金流向排名 - 推荐)
+    try:
+        df = ak.stock_sector_fund_flow_rank(indicator="今日")
+        if df is not None and len(df) > 0:
+            debug_info.append(f"[OK] 方法1成功: {len(df)}条数据 (资金流向)")
+            result = parse_sector_fund_flow_rank_df(df)
+            if result:
+                return result, debug_info
+    except Exception as e:
+        debug_info.append(f"[FAIL] 方法1失败: {str(e)[:60]}")
+
+    # 方法2: stock_sector_spot (东方财富行业板块行情 - 备用)
+    try:
+        df = ak.stock_sector_spot()
+        if df is not None and len(df) > 0:
+            debug_info.append(f"[OK] 方法2成功: {len(df)}条数据 (行业板块)")
+            result = parse_sector_spot_df(df)
+            if result:
+                return result, debug_info
+    except Exception as e:
+        debug_info.append(f"[FAIL] 方法2失败: {str(e)[:60]}")
+
+    debug_info.append("[FAIL] 所有方法均失败")
+    return {}, debug_info
+
+
+def parse_sector_spot_df(df) -> dict:
+    """
+    解析 stock_sector_spot 返回的行业板块DataFrame
+
+    数据列索引:
+    - 1: 行业名称
+    - 6: 总成交额
+    - 7: 总市值
+    """
+    if df is None or len(df) == 0:
+        return {}
+
+    result = {}
+
+    try:
+        # 使用列索引访问数据（避免编码问题）
+        name_idx = 1      # 行业名称
+        amount_idx = 6    # 总成交额
+
+        # 计算总成交额
+        total_amount = df.iloc[:, amount_idx].sum()
+
+        if total_amount == 0:
+            return {}
+
+        # 提取每个行业的数据
+        for _, row in df.iterrows():
+            try:
+                sector_name = str(row.iloc[name_idx]).strip()
+                amount = float(row.iloc[amount_idx])
+
+                if amount > 0:
+                    ratio = (amount / total_amount) * 100
+
+                    result[sector_name] = {
+                        'net_inflow': 0,  # stock_sector_spot没有净流入数据
+                        'total_amount': amount,
+                        'ratio': ratio
+                    }
+            except Exception as e:
+                continue
+
+        return result
+    except Exception as e:
+        return {}
+
+
+def parse_sector_fund_flow_rank_df(df) -> dict:
+    """
+    解析 stock_sector_fund_flow_rank 返回的资金流向DataFrame
+
+    数据列:
+    - 名称: 行业/板块名称
+    - 今日主力净流入-净额: 主力净流入金额
+    - 今日主力净流入-净占比: 主力净流入占比
+    - 今日涨跌幅: 涨跌幅
+    """
+    if df is None or len(df) == 0:
+        return {}
+
+    result = {}
+
+    try:
+        # 使用列名访问数据
+        name_col = '名称'
+        net_inflow_col = '今日主力净流入-净额'
+        net_ratio_col = '今日主力净流入-净占比'
+        change_col = '今日涨跌幅'
+
+        # 计算总净流入绝对值（用于计算占比权重）
+        total_abs_inflow = 0
+        for _, row in df.iterrows():
+            try:
+                inflow = float(row[net_inflow_col])
+                total_abs_inflow += abs(inflow)
+            except:
+                continue
+
+        if total_abs_inflow == 0:
+            return {}
+
+        # 提取每个行业的数据
+        for _, row in df.iterrows():
+            try:
+                sector_name = str(row[name_col]).strip()
+                net_inflow = float(row[net_inflow_col])
+                net_ratio = float(row[net_ratio_col]) if net_ratio_col in df.columns else 0
+                change_pct = float(row[change_col]) if change_col in df.columns else 0
+
+                # 计算该行业净流入占总净流入绝对值的比例
+                flow_ratio = (abs(net_inflow) / total_abs_inflow) * 100
+
+                result[sector_name] = {
+                    'net_inflow': net_inflow,
+                    'net_ratio': net_ratio,  # API返回的占比
+                    'flow_ratio': flow_ratio,  # 基于绝对值计算的占比
+                    'change_pct': change_pct,
+                    'total_amount': abs(net_inflow)  # 用净流入绝对值作为成交量的代理
+                }
+            except Exception as e:
+                continue
+
+        return result
+    except Exception as e:
+        return {}
+
+
+def get_sector_volume_ratio(sector_name: str, fund_flow_data: dict = None) -> dict:
+    """
+    获取行业资金流向数据
+
+    返回包含成交额占比、净流入、情绪状态等信息的字典
+    """
+    if not fund_flow_data:
+        return {'ratio': 0, 'net_inflow': 0, 'sentiment': '无数据', 'change_pct': 0}
+
+    # 首先尝试使用映射表
+    mapped_name = SECTOR_NAME_MAPPING.get(sector_name, sector_name)
+
+    # 精确匹配（使用映射后的名称）
+    data = None
+    if mapped_name in fund_flow_data:
+        data = fund_flow_data[mapped_name]
+    elif sector_name in fund_flow_data:
+        data = fund_flow_data[sector_name]
+    else:
+        # 模糊匹配
+        for key, val in fund_flow_data.items():
+            if sector_name in key or key in sector_name or mapped_name in key or key in mapped_name:
+                data = val
+                break
+
+    if not data:
+        return {'ratio': 0, 'net_inflow': 0, 'sentiment': '无数据', 'change_pct': 0}
+
+    # 根据数据类型选择合适的占比字段
+    # 使用 .get() 方法避免 KeyError
+    if data.get('flow_ratio') is not None:
+        # 使用资金流向计算的占比
+        ratio = data['flow_ratio']
+    elif data.get('ratio') is not None:
+        # 使用成交额占比
+        ratio = data['ratio']
+    else:
+        ratio = 0
+
+    net_inflow = data.get('net_inflow', 0)
+    change_pct = data.get('change_pct', 0)
+
+    # 判断情绪状态（根据资金热度）
+    if ratio >= 15:
+        sentiment = "⚠️ 极度活跃"
+    elif ratio >= 10:
+        sentiment = "🔥 非常活跃"
+    elif ratio >= 5:
+        sentiment = "📈 活跃"
+    elif ratio >= 2:
+        sentiment = "😐 正常"
+    else:
+        sentiment = "❄️ 冷清"
+
+    return {
+        'ratio': ratio,
+        'net_inflow': net_inflow,
+        'change_pct': change_pct,
+        'sentiment': sentiment
+    }
+
+
+def calculate_market_temperature(fund_code: str, fund_name: str, include_volume: bool = False,
+                                fund_flow_data: dict = None) -> dict:
+    """计算市场温度"""
+    try:
+        df = get_fund_nav_history(fund_code, period="1年")
+
+        if df is None or len(df) < 60:
+            return None
+
+        latest_nav = df.iloc[-1]['nav']
+
+        # 计算涨跌幅
+        week_ago_nav = df.iloc[-5]['nav'] if len(df) >= 5 else df.iloc[0]['nav']
+        month_ago_nav = df.iloc[-20]['nav'] if len(df) >= 20 else df.iloc[0]['nav']
+
+        week_return = (latest_nav - week_ago_nav) / week_ago_nav * 100
+        month_return = (latest_nav - month_ago_nav) / month_ago_nav * 100
+
+        # 价格位置
+        min_nav = df['nav'].min()
+        max_nav = df['nav'].max()
+        price_position = (latest_nav - min_nav) / (max_nav - min_nav) * 100 if max_nav > min_nav else 50
+
+        # 回撤
+        df_copy = df.copy()
+        df_copy['cummax'] = df_copy['nav'].cummax()
+        current_drawdown = (df_copy.iloc[-1]['nav'] - df_copy.iloc[-1]['cummax']) / df_copy.iloc[-1]['cummax'] * 100
+
+        # 趋势强度
+        if len(df) >= 20:
+            ma20 = df.iloc[-20:]['nav'].mean()
+            ma60 = df.iloc[-60:]['nav'].mean() if len(df) >= 60 else df.iloc[0:]['nav'].mean()
+            trend_strength = ((latest_nav - ma20) / ma20 * 100 + (ma20 - ma60) / ma60 * 100) / 2
+        else:
+            trend_strength = 0
+
+        # 成交额占比
+        volume_ratio = None
+        net_inflow = 0
+        volume_heat = 0
+        vol_data = None
+        if include_volume and fund_flow_data:
+            vol_data = get_sector_volume_ratio(fund_name, fund_flow_data)
+            volume_ratio = vol_data.get('ratio', 0) if vol_data else 0
+            net_inflow = vol_data.get('net_inflow', 0) if vol_data else 0
+
+            if volume_ratio >= 40:
+                volume_heat = 100
+            elif volume_ratio >= 30:
+                volume_heat = 80
+            elif volume_ratio >= 20:
+                volume_heat = 60
+            elif volume_ratio >= 15:
+                volume_heat = 40
+            elif volume_ratio >= 10:
+                volume_heat = 20
+            else:
+                volume_heat = 0
+
+        # 综合温度
+        return_score = (week_return * 0.3 + month_return * 0.7) / 10 + 50
+        return_score = max(0, min(100, return_score))
+
+        position_score = price_position
+        trend_score = max(0, min(100, 50 + trend_strength * 5))
+        drawdown_score = max(0, min(100, 50 + current_drawdown))
+
+        if include_volume and volume_ratio is not None and volume_ratio > 0:
+            temperature = (
+                return_score * 0.35 +
+                position_score * 0.20 +
+                trend_score * 0.15 +
+                drawdown_score * 0.15 +
+                volume_heat * 0.15
+            )
+        else:
+            temperature = (
+                return_score * 0.40 +
+                position_score * 0.25 +
+                trend_score * 0.20 +
+                drawdown_score * 0.15
+            )
+
+        # 热度等级
+        if temperature < 15:
+            heat_level = "冰冷"
+            icon = "🥶"
+        elif temperature < 30:
+            heat_level = "寒冷"
+            icon = "🧊"
+        elif temperature < 45:
+            heat_level = "凉爽"
+            icon = "🌤️"
+        elif temperature < 60:
+            heat_level = "温和"
+            icon = "😊"
+        elif temperature < 75:
+            heat_level = "炎热"
+            icon = "🔥"
+        else:
+            heat_level = "滚烫"
+            icon = "🌋"
+
+        result = {
+            'fund_code': fund_code,
+            'fund_name': fund_name,
+            'temperature': round(temperature, 1),
+            'heat_level': heat_level,
+            'icon': icon,
+            'metrics': {
+                'week_return': round(week_return, 2),
+                'month_return': round(month_return, 2),
+                'price_position': round(price_position, 1),
+                'current_drawdown': round(current_drawdown, 2),
+                'trend_strength': round(trend_strength, 2)
+            }
+        }
+
+        if include_volume and volume_ratio is not None and vol_data:
+            result['volume_ratio'] = round(volume_ratio, 1)
+            result['net_inflow'] = round(net_inflow, 2)
+            result['volume_heat'] = volume_heat
+            result['volume_sentiment'] = vol_data.get('sentiment', '数据获取中')
+
+        return result
+    except Exception as e:
+        import traceback
+        print(f"Error calculating temperature for {fund_code}: {e}")
+        traceback.print_exc()
+        return None
+
+
+def get_benchmark_indices() -> list:
+    """获取市场指数列表"""
+    return [
+        {'code': '000001', 'name': '上证指数'},
+        {'code': '399001', 'name': '深证成指'},
+        {'code': '000300', 'name': '沪深300'},
+        {'code': '000905', 'name': '中证500'},
+        {'code': '000852', 'name': '中证1000'},
+        {'code': '399006', 'name': '创业板指'},
+        {'code': '399303', 'name': '创业板50'},
+        {'code': '000688', 'name': '科创50'},
+        {'code': '000016', 'name': '上证50'},
+        {'code': '399673', 'name': '深证100'},
+        {'code': '000698', 'name': '中证全指'},
+        {'code': '399005', 'name': '中小100'},
+    ]
+
+
+def get_sector_etfs() -> list:
+    """获取行业ETF列表"""
+    return [
+        {'code': '161725', 'name': '白酒'},
+        {'code': '516090', 'name': '新能源'},
+        {'code': '512480', 'name': '半导体'},
+        {'code': '512980', 'name': '传媒'},
+        {'code': '515220', 'name': '煤炭'},
+        {'code': '515180', 'name': '红利'},
+        {'code': '512170', 'name': '医疗'},
+        {'code': '515030', 'name': '新能源车'},
+        {'code': '512880', 'name': '证券'},
+        {'code': '512800', 'name': '银行'},
+    ]
+
+
+def market_thermometer_page():
+    """市场温度计页面"""
+    st.title("🌡️ 市场温度计")
+    st.info("📊 多维度分析：价格位置 + 涨跌幅 + 成交额占比（情绪指标）")
+
+    # 温度说明
+    with st.expander("📖 温度等级说明"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**🥶 0-15°C 冰冷**")
+            st.markdown("**🧊 15-30°C 寒冷**")
+        with col2:
+            st.markdown("**🌤️ 30-45°C 凉爽**")
+            st.markdown("**😊 45-60°C 温和**")
+        with col3:
+            st.markdown("**🔥 60-75°C 炎热**")
+            st.markdown("**🌋 75-100°C 滚烫**")
+
+        st.divider()
+        st.markdown("**💡 成交额占比说明**")
+        st.markdown("- **≥40%**: ⚠️ 极度拥挤，强烈建议止盈")
+        st.markdown("- **30-40%**: 🔥 非常活跃，建议谨慎")
+        st.markdown("- **20-30%**: 📈 活跃，资金关注度高")
+        st.markdown("- **10-20%**: 😐 正常范围")
+        st.markdown("- **<10%**: ❄️ 冷清，关注度低")
+
+    # 标签页
+    tab1, tab2, tab3 = st.tabs(["📈 主要指数", "🏭 行业板块(多维度)", "📊 我的持仓"])
+
+    with tab1:
+        st.subheader("主要市场指数温度")
+
+        indices = get_benchmark_indices()
+
+        with st.spinner("正在分析指数温度..."):
+            temperatures = []
+            for idx in indices:
+                result = calculate_market_temperature(idx['code'], idx['name'])
+                if result:
+                    temperatures.append(result)
+
+        if temperatures:
+            temperatures.sort(key=lambda x: x['temperature'], reverse=True)
+
+            data = []
+            for temp in temperatures:
+                data.append({
+                    '指数': temp['fund_name'],
+                    '代码': temp['fund_code'],
+                    '温度': temp['temperature'],
+                    '状态': f"{temp['icon']} {temp['heat_level']}",
+                    '近1周': f"{temp['metrics']['week_return']:+.2f}%",
+                    '近1月': f"{temp['metrics']['month_return']:+.2f}%",
+                    '价格位置': f"{temp['metrics']['price_position']:.1f}%",
+                    '回撤': f"{temp['metrics']['current_drawdown']:.2f}%"
+                })
+
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+
+    with tab2:
+        st.subheader("行业板块多维度温度分析")
+        st.caption("结合价格走势和成交额占比，更准确判断市场情绪")
+
+        include_volume = st.checkbox("📊 包含成交额分析（推荐）", value=True,
+                                     help="获取东方财富行业资金流向数据")
+
+        sectors = get_sector_etfs()
+
+        fund_flow_data = None
+
+        if include_volume:
+            with st.spinner("正在获取行业资金流向数据..."):
+                fund_flow_data, _ = get_sector_fund_flow_data()
+
+        with st.spinner("正在分析行业温度..."):
+            sector_temps = []
+            for sector in sectors:
+                result = calculate_market_temperature(
+                    sector['code'],
+                    sector['name'],
+                    include_volume=include_volume,
+                    fund_flow_data=fund_flow_data
+                )
+                if result:
+                    sector_temps.append(result)
+
+        if sector_temps:
+            sector_temps.sort(key=lambda x: x['temperature'], reverse=True)
+
+            # 预警
+            if include_volume and fund_flow_data:
+                high_volume_sectors = [s for s in sector_temps if s.get('volume_ratio', 0) > 20]
+                if high_volume_sectors:
+                    st.warning(f"⚠️ {len(high_volume_sectors)} 个行业成交额占比超过20%，警惕情绪过热！")
+
+            # 热力图
+            st.subheader("🌡️ 行业热力分布")
+            cols = st.columns(4)
+
+            for i, sector in enumerate(sector_temps):
+                col = cols[i % 4]
+
+                with col:
+                    delta_str = sector['heat_level']
+                    if include_volume and 'volume_ratio' in sector:
+                        delta_str += f" | 占比: {sector['volume_ratio']:.1f}%"
+
+                    st.metric(
+                        label=f"{sector['icon']} {sector['fund_name']}",
+                        value=f"{sector['temperature']}°C",
+                        delta=delta_str
+                    )
+
+                    if include_volume and 'volume_sentiment' in sector:
+                        net_inflow_str = ""
+                        if 'net_inflow' in sector:
+                            inflow = sector['net_inflow']
+                            if inflow > 0:
+                                net_inflow_str = f" | 净流入: +{inflow:.1f}万"
+                            elif inflow < 0:
+                                net_inflow_str = f" | 净流出: {inflow:.1f}万"
+                        st.caption(f"📊 {sector['volume_sentiment']}{net_inflow_str}")
+
+                    st.caption(
+                        f"近1月: **{sector['metrics']['month_return']:+.1f}%** | "
+                        f"位置: {sector['metrics']['price_position']:.0f}%"
+                    )
+
+            st.divider()
+
+            # 资金流向排行
+            if include_volume and fund_flow_data:
+                st.subheader("📊 成交额占比排行榜")
+
+                volume_sorted = sorted(
+                    [s for s in sector_temps if 'volume_ratio' in s],
+                    key=lambda x: x['volume_ratio'],
+                    reverse=True
+                )
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### 🔥 资金追捧TOP5")
+                    for s in volume_sorted[:5]:
+                        st.metric(
+                            f"{s['fund_name']}",
+                            f"{s['volume_ratio']:.1f}%",
+                            delta=s.get('volume_sentiment', '')
+                        )
+
+                with col2:
+                    st.markdown("#### ❄️ 资金冷清TOP5")
+                    for s in volume_sorted[-5:]:
+                        st.metric(
+                            f"{s['fund_name']}",
+                            f"{s['volume_ratio']:.1f}%",
+                            delta=s.get('volume_sentiment', '')
+                        )
+
+            st.divider()
+
+            # 温度分类
+            boiling = [s for s in sector_temps if s['temperature'] > 75]
+            hot = [s for s in sector_temps if 60 < s['temperature'] <= 75]
+            warm = [s for s in sector_temps if 45 <= s['temperature'] <= 60]
+            cool = [s for s in sector_temps if 30 <= s['temperature'] < 45]
+            cold = [s for s in sector_temps if s['temperature'] < 30]
+
+            col1, col2, col3, col4, col5 = st.columns(5)
+
+            with col1:
+                st.markdown("#### 🌋 滚烫\n(>75°C)")
+                for s in boiling[:3]:
+                    st.metric(s['fund_name'], f"{s['temperature']}°C")
+                if not boiling:
+                    st.caption("无")
+
+            with col2:
+                st.markdown("#### 🔥 炎热\n(60-75°C)")
+                for s in hot[:3]:
+                    st.metric(s['fund_name'], f"{s['temperature']}°C")
+                if not hot:
+                    st.caption("无")
+
+            with col3:
+                st.markdown("#### 😊 温和\n(45-60°C)")
+                for s in warm[:3]:
+                    st.metric(s['fund_name'], f"{s['temperature']}°C")
+                if not warm:
+                    st.caption("无")
+
+            with col4:
+                st.markdown("#### 🌤️ 凉爽\n(30-45°C)")
+                for s in cool[:3]:
+                    st.metric(s['fund_name'], f"{s['temperature']}°C")
+                if not cool:
+                    st.caption("无")
+
+            with col5:
+                st.markdown("#### 🥶 寒冷\n(<30°C)")
+                for s in cold[:3]:
+                    st.metric(s['fund_name'], f"{s['temperature']}°C")
+                if not cold:
+                    st.caption("无")
+
+            st.divider()
+
+            # 详情表格
+            st.subheader("📋 行业温度详情")
+
+            data = []
+            for temp in sector_temps:
+                row_data = {
+                    '行业': temp['fund_name'],
+                    '代码': temp['fund_code'],
+                    '温度': temp['temperature'],
+                    '状态': f"{temp['icon']} {temp['heat_level']}",
+                    '近1周': f"{temp['metrics']['week_return']:+.2f}%",
+                    '近1月': f"{temp['metrics']['month_return']:+.2f}%",
+                    '价格位置': f"{temp['metrics']['price_position']:.1f}%"
+                }
+
+                if include_volume and 'volume_ratio' in temp:
+                    row_data['成交额占比'] = f"{temp['volume_ratio']:.1f}%"
+
+                    if 'net_inflow' in temp:
+                        inflow = temp['net_inflow']
+                        if inflow > 0:
+                            row_data['资金净流入'] = f"+{inflow:.1f}万"
+                        elif inflow < 0:
+                            row_data['资金净流入'] = f"{inflow:.1f}万"
+                        else:
+                            row_data['资金净流入'] = "0"
+
+                    row_data['情绪'] = temp.get('volume_sentiment', '-')
+
+                data.append(row_data)
+
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+
+    with tab3:
+        st.subheader("我的持仓温度")
+
+        holdings = get_holdings()
+
+        if not holdings:
+            st.warning("⚠️ 暂无持仓，请先买入基金")
+            return
+
+        with st.spinner("正在分析持仓温度..."):
+            holding_temps = []
+            for h in holdings:
+                result = calculate_market_temperature(h['fund_code'], h['fund_name'])
+                if result:
+                    result['current_value'] = h['current_value']
+                    result['profit_loss'] = h['profit_loss']
+                    result['profit_loss_ratio'] = h['profit_loss_ratio']
+                    holding_temps.append(result)
+
+        if holding_temps:
+            holding_temps.sort(key=lambda x: x['temperature'], reverse=True)
+
+            avg_temp = sum(h['temperature'] for h in holding_temps) / len(holding_temps)
+            hot_count = sum(1 for h in holding_temps if h['temperature'] > 60)
+            cold_count = sum(1 for h in holding_temps if h['temperature'] < 40)
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("平均温度", f"{avg_temp:.1f}°C")
+            with col2:
+                st.metric("高温基金", hot_count, ">60°C")
+            with col3:
+                st.metric("低温基金", cold_count, "<40°C")
+            with col4:
+                total_value = sum(h['current_value'] for h in holding_temps)
+                hot_value = sum(h['current_value'] for h in holding_temps if h['temperature'] > 60)
+                st.metric("高温占比", f"{hot_value/total_value*100:.1f}%")
+
+            st.divider()
+
+            data = []
+            for temp in holding_temps:
+                pl_emoji = "🔴" if temp['profit_loss'] > 0 else "🟢"
+                data.append({
+                    '基金': temp['fund_name'],
+                    '温度': temp['temperature'],
+                    '状态': f"{temp['icon']} {temp['heat_level']}",
+                    '市值': f"¥{temp['current_value']:.0f}",
+                    '盈亏': f"{pl_emoji} {temp['profit_loss']:+.0f} ({temp['profit_loss_ratio']:+.1f}%)",
+                    '近1月': f"{temp['metrics']['month_return']:.2f}%"
+                })
+
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("💡 温度分析建议")
+
+            if avg_temp < 30:
+                st.success("🟢 **市场偏冷** - 可能是较好的加仓时机")
+            elif avg_temp < 50:
+                st.info("🔵 **市场温和** - 建议保持正常定投节奏")
+            elif avg_temp < 70:
+                st.warning("🟠 **市场偏热** - 建议谨慎追高，可适当止盈")
+            else:
+                st.error("🔴 **市场过热** - 建议控制仓位，注意风险")
+
+            st.divider()
+            st.subheader("🎯 个别基金建议")
+
+            hot_funds = [h for h in holding_temps if h['temperature'] >= 75]
+            cold_funds = [h for h in holding_temps if h['temperature'] <= 20]
+
+            if hot_funds:
+                for temp in hot_funds:
+                    st.warning(f"⚠️ **{temp['fund_name']}** 温度过高，建议关注止盈机会")
+
+            if cold_funds:
+                for temp in cold_funds:
+                    st.info(f"📌 **{temp['fund_name']}** 温度较低，可考虑逢低补仓")
+
+            if not hot_funds and not cold_funds:
+                st.info("暂无极端温度的基金")

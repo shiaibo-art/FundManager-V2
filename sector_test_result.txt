@@ -1,0 +1,43 @@
+Sector Matching Test Results:
+==================================================
+
+白酒 (mapped: 酿酒行业):
+  ratio=0.20%
+  sentiment=❄️ 冷清
+
+新能源 (mapped: 其它行业):
+  ratio=1.25%
+  sentiment=❄️ 冷清
+
+半导体 (mapped: 电子器件):
+  ratio=7.67%
+  sentiment=❄️ 冷清
+
+传媒 (mapped: 传媒娱乐):
+  ratio=1.23%
+  sentiment=❄️ 冷清
+
+煤炭 (mapped: 煤炭行业):
+  ratio=2.05%
+  sentiment=❄️ 冷清
+
+红利 (mapped: 其它行业):
+  ratio=1.25%
+  sentiment=❄️ 冷清
+
+医疗 (mapped: 医疗器械):
+  ratio=0.40%
+  sentiment=❄️ 冷清
+
+新能源车 (mapped: 汽车制造):
+  ratio=3.13%
+  sentiment=❄️ 冷清
+
+证券 (mapped: 金融行业):
+  ratio=3.95%
+  sentiment=❄️ 冷清
+
+银行 (mapped: 金融行业):
+  ratio=3.95%
+  sentiment=❄️ 冷清
+
