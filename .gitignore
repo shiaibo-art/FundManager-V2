@@ -43,3 +43,8 @@ nul
 
 # Claude Code
 .claude/
+
+# Config files with sensitive data
+config/openai_config.json
+config/*.json
+!config/*.example.json

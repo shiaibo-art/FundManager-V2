@@ -1,7 +1,0 @@
-{
-  "api_key": "sk-0fz2U1STeBJ1g83EFvJBa5BwHMYCM0Y0UYk3D4Bs3fTcTRzE",
-  "base_url": "http://10.141.103.6:3030/v1",
-  "model": "deepseek-reasoner",
-  "temperature": 0.7,
-  "max_tokens": 2000
-}
